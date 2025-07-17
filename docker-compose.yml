@@ -1,0 +1,96 @@
+  version: '3.8'
+  
+  services:
+    postgres:
+      image: postgres:15-alpine
+      container_name: userservice-postgres
+      restart: unless-stopped
+      env_file: .env
+      environment:
+        POSTGRES_DB: ${POSTGRES_DB}
+        POSTGRES_USER: ${POSTGRES_USER}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      volumes:
+        - postgres_data:/var/lib/postgresql/data
+      ports:
+        - "5432:5432"
+      networks:
+        - microservices-network
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+  
+    mongodb:
+      image: mongo:7.0
+      container_name: projectservice-mongodb
+      restart: unless-stopped
+      env_file: .env
+      environment:
+        MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
+        MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+        MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+      volumes:
+        - mongo_data:/data/db
+      ports:
+        - "27017:27017"
+      networks:
+        - microservices-network
+      healthcheck:
+        test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+        interval: 10s
+        timeout: 5s
+        retries: 5
+  
+    userservice:
+      build:
+        context: ./TestTaskApp
+        dockerfile: ./UserService.API/Dockerfile
+      container_name: userservice-api
+      restart: unless-stopped
+      env_file: .env
+      environment:
+        - ProjectService__BaseUrl=http://projectservice
+        - ASPNETCORE_ENVIRONMENT=Development
+        - ASPNETCORE_URLS=http://+:80
+        - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      ports:
+        - "5001:80"
+      depends_on:
+        postgres:
+          condition: service_healthy
+      networks:
+        - microservices-network
+  
+    projectservice:
+      build:
+        context: ./TestTaskApp
+        dockerfile: ./ProjectService.API/Dockerfile
+      container_name: projectservice-api
+      restart: unless-stopped
+      env_file: .env
+      environment:
+        - UserService__BaseUrl=http://userservice
+        - ASPNETCORE_ENVIRONMENT=Development
+        - ASPNETCORE_URLS=http://+:80
+        - MongoSettings__ConnectionString=mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@mongodb:27017/${MONGO_DATABASE}?authSource=admin
+        - MongoSettings__DatabaseName=${MONGO_DATABASE}
+        - UserServiceSettings__BaseUrl=http://userservice
+      ports:
+        - "5002:80"
+      depends_on:
+        mongodb:
+          condition: service_healthy
+        userservice:
+          condition: service_started
+      networks:
+        - microservices-network
+  
+  networks:
+    microservices-network:
+      driver: bridge
+  
+  volumes:
+    postgres_data:
+    mongo_data:
